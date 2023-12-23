@@ -1,0 +1,289 @@
+---
+title: "SDG_final 1"
+author: "Huseyn Panahov"
+date: "2023-05-10"
+output: html_document
+---
+
+# Data wrangling 
+
+**Revisit the observations**  
+
+# Libraries  
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+library(readxl) #for reading excel files
+library(openxlsx)
+library(dplyr) #for dataset controls/analysis  
+library(ggplot2) # for visualizations 
+library(plotly)
+library(readr)
+library(tidyr)
+library(lavaan)
+library(semPlot)
+library(corrplot)
+
+```
+
+## SDG Data set  
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+# Uploading the SDG data 
+file_path <- "SDR-2022-database.xlsx"
+
+sheet8 <- "Backdated SDG Index"
+
+sdg_index <- read_excel(file_path, sheet = sheet8)
+
+tail(sdg_index)
+```
+
+**Filter the data for 2021**  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+sdg_index_2021 <- sdg_index %>%
+  filter(Year == 2021)
+
+head(sdg_index_2021)
+
+``` 
+
+
+**Filter the data for necessary variables**  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Create a new data frame with the selected variables from sdg_index_2021
+sdg_data <- sdg_index_2021 %>%
+  select(Country, Region, `Income Group`, `SDG Index Score`, `Goal 1 Score`, `Goal 2 Score`, `Goal 5 Score`, `Goal 13 Score`, n_sdg6_water, n_sdg6_sanita, n_sdg7_elecac, n_sdg8_accounts, n_sdg9_intuse, n_sdg9_mobuse, n_sdg9_lpi, n_sdg11_transport, n_sdg17_statperf)
+
+head(sdg_data)
+``` 
+
+**Optimizing the variable titles**  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+sdg_data <- sdg_data %>%
+  rename(
+    sdg_ind = 'SDG Index Score',  
+    sdg1 = 'Goal 1 Score',
+    sdg2 = 'Goal 2 Score', 
+    sdg5 = 'Goal 5 Score', 
+    sdg13 = 'Goal 13 Score',
+    sdg6_water = 'n_sdg6_water', 
+    sdg6_sanit = 'n_sdg6_sanita',  
+    sdg7_electr = 'n_sdg7_elecac',
+    sdg8_bank = 'n_sdg8_accounts',
+    sdg9_internet = 'n_sdg9_intuse',
+    sdg9_mobile = 'n_sdg9_mobuse',
+    sdg9_lpi = 'n_sdg9_lpi', 
+    sdg11_transport = 'n_sdg11_transport',
+    sdg17_statperf = 'n_sdg17_statperf'
+    
+  )
+
+head(sdg_data) #checking the new names 
+
+``` 
+
+## Merging the HCI Index  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+## Uploading data sets 
+file_path <- "hci_data_wbg_2020.xlsx"
+
+sheet3 <- "HCI_2020_MaleFemale"
+
+hci_data <- read_excel(file_path, sheet = sheet3)
+
+head(hci_data)
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+## The HCI data set
+hci_index <- hci_data %>%
+  select('Country Name', 'HUMAN CAPITAL INDEX 2020')
+
+hci_index <- hci_index %>%
+  rename(
+    Country = 'Country Name',  
+    hci_ind = 'HUMAN CAPITAL INDEX 2020',
+)
+
+head(hci_index)
+```
+
+**Merging the two data frames**   
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+# based on the "Country" column
+merged_data <- merge(sdg_data, hci_index, by = "Country", all = TRUE)
+
+tail(merged_data)
+summary(merged_data)
+``` 
+
+**Removing the rows with missing sdg_ind and hci_ind variables**   
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+new_data <- na.omit(merged_data, cols = c("sdg_ind", "hci_ind"))
+summary(new_data)  
+
+``` 
+
+
+# Developing Infrastructure index     
+
+**Kaiser-Meyer-Olkin (KMO) Test**  
+
+The Kaiser-Meyer-Olkin (KMO) measure of sampling adequacy is a statistic that indicates the proportion of variance in the variables. The KMO values range from 0 to 1, with higher values indicating a better fit for factor analysis. The individual KMO values for each variable tell us how well each variable fits with all the others. Variables with a KMO less than 0.5 might not be suited for factor analysis, as they do not correlate well with the other variables.   
+  
+As we see from the below output the MSA values of all my variables are 0.8 or above, which brings the overall MSA score to 0.87. This is a positive sign, so I proceed to constructing the Infrastructure index as a latent variable.  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(psych)
+
+# KMO
+KMO(r = cor(new_data[,c('sdg6_water', 'sdg6_sanit', 'sdg7_electr', 'sdg8_bank', 'sdg9_internet', 'sdg11_transport')])) 
+
+
+``` 
+  
+**Side note on eigen-values**   
+I checked the eigen values and based on the Kaiser-Guttman Rule, technically I could drop all the variables besides sdg6_water. It is the only with an Eigen value higher than 1. However, that is not consistent with my theoretical approach, so I proceed with my analysis. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+# Eigen Values
+new_data_eigen <- eigen(cor(new_data[,c('sdg6_water', 'sdg6_sanit', 'sdg7_electr', 'sdg8_bank', 'sdg9_internet', 'sdg11_transport')]))
+new_data_eigen$values
+
+``` 
+
+
+
+**First model**  
+
+The model above does not perform well. The CFI and TLI indicators are below the threshold, while RMSE value is very high.   
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+infra1_model<-'#Latent Variables
+infra1_index =~ sdg6_water + sdg6_sanit + sdg7_electr + sdg8_bank + sdg9_internet + sdg11_transport'
+
+#CFA Model Estimation and Fit Measures
+infra1_fit<-sem(model=infra1_model, data = new_data)
+summary(infra1_fit, fit.measures=TRUE, standardized=TRUE) 
+
+``` 
+  
+**Estimating the modification indices:**  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+infra1_fit <- sem(model=infra1_model, data = new_data)
+
+modindices <- lavTestLRT(infra1_fit, add=TRUE)
+
+
+# to calculate and sort modification indices
+modindices <- modindices(infra1_fit)
+sorted_modindices <- modindices[order(-modindices$mi), ]
+print(sorted_modindices)
+
+
+``` 
+
+**New model with added paths:**    
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+  
+infra2_model <- '#Latent Variables
+  infrastructure_index =~ sdg6_water + sdg6_sanit + sdg7_electr + sdg8_bank + sdg9_internet + sdg11_transport
+  # Direct Paths
+  sdg6_sanit ~ sdg6_water
+  sdg9_internet ~ sdg8_bank'
+
+# re-run the SEM analysis with this new model:
+infra2_fit <- sem(model=infra2_model, data = new_data) 
+summary(infra2_fit) 
+
+``` 
+
+**Checking the fit indices of the new model:**   
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+summary(infra2_fit, fit.measures=TRUE)
+
+``` 
+
+
+  
+**Observations:**   
+
+This model performs much better and over it is an acceptable fit. We can see that the Comparative Fit Index (CFI) and Tucker-Lewis Index (TLI) values are above 0.99, which a very positive indicator. The Root Mean Square Error of Approximation (RMSEA) is 0.056, which is not ideal but an acceptable fit.
+
+**Saving the new variable**   
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+# Compute the latent variable scores
+infrastr_ind_scores <- predict(infra2_fit)
+
+# Add the latent variable scores to the original data frame 
+new_data$infrastr_ind <- infrastr_ind_scores
+
+
+``` 
+
+**Rescaling the new variable: **   
+The current infrastr_ind is on an unconventional scale. I use the min-max normalization technique to transform it into a new scale from 0 to 1. This method scales the values by subtracting the minimum value and dividing by the range of the original values (i.e., the difference between the maximum and minimum values). 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+infrastr_ind <- new_data$infrastr_ind
+
+# Calculate the minimum and maximum values of the original variable
+min_value <- min(infrastr_ind)
+max_value <- max(infrastr_ind)
+
+# Rescale the variable to the new range (0 to 1)
+rescaled_var <- (infrastr_ind - min_value) / (max_value - min_value)
+
+``` 
+  
+Add the new index as a new variable into my data frame: infr_ind. Saving the new data framework into a new MS Excel file.  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+new_data$infr_ind <- rescaled_var 
+
+write.xlsx(new_data, "sdg_hci_data3.0.xlsx")
+``` 
+
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+
+``` 
+
+
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+
+
+``` 
+
+
+# 
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+
+``` 
+
+
+# 
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+
+``` 
