@@ -1,0 +1,315 @@
+---
+title: "SDGs: Human Capital vs Infrastructure"
+author: "Huseyn Panahov"
+date: "2023-05-07"
+output: html_document
+---
+
+# Part 2: Constructing the Infrastructure Index 
+
+### Libraries 
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(car)
+library(corrplot)
+library(dplyr)  
+library(ggplot2) 
+library(MVN) 
+library(lavaan) 
+library(lmtest) 
+library(openxlsx)
+library(plotly) 
+library(QuantPsyc)
+library(readr)
+library(readxl) 
+library(semPlot) 
+library(tidyr)
+```
+
+## Loading the data 
+Our new data frame includes both the Human Capital Index estimated by the World Bank Group and the synthetic Infrastructure Index that we manually constructed based on the following 5 indicators from the UN SDG Report 20222:   
+- sdg6_water: Population using at least basic drinking water services (%)       
+- sdg6_sanit: Population using at least basic sanitation services (%)     
+- sdg7_electr: Population with access to electricity (%)    
+- sdg8_bank: Population with bank accounts (%)   
+- sdg9_intuse: Population using the internet (%)     
+- sdg11_transport: The percentage of the surveyed population that responded "satisfied" to the question "In the city or area where you live, are you satisfied or dissatisfied with the public transportation systems?".    
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+file_path <- "sdg_hci_data3.0.xlsx" 
+data <- read.xlsx(file_path, sheet = 1) 
+head(data)
+```
+
+
+# Correlation Plot  
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# check the classes of the selected columns
+sapply(data[c("sdg_ind", "sdg1", "sdg5", "sdg13", "hci_ind", "infr_ind", "sdg17_statperf")], class)
+
+``` 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+data$infr_ind <- as.numeric(as.character(data$infr_ind))
+# select the columns
+specific_data <- data[, c("sdg_ind", "sdg1", "sdg5", "sdg13", "hci_ind", "infr_ind", "sdg17_statperf")]
+# correlation matrix 
+cor_matrix <- cor(specific_data, use = "complete.obs")
+# the plot
+corrplot(cor_matrix, method = "number")
+
+
+``` 
+
+# Multiple Regression model 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# fit the multiple linear regression model
+lm_model <- lm(sdg_ind ~ hci_ind + infr_ind + sdg17_statperf, data = data)
+# model summary 
+summary(lm_model) 
+
+``` 
+# Model assessment: regression diagnostics   
+
+
+**1. Test for Linearity:**       
+We are looking for linearity and equal variance in the below plot. Upon visual examination, notice that there are no substantial deviations in the red line, which confirms that the relationship is linear between our predictors and response variable.  
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+
+# Residual vs Fitted Plot
+plot(lm_model$fitted.values, resid(lm_model),
+     xlab="Fitted Values", ylab="Residuals",
+     main="Residual vs. Fitted Plot for Linearity Test")
+abline(h=0, col="red")  
+# Component + Residual (Partial Residual) Plots 
+crPlots(lm_model)  
+# Added Variable Plots
+avPlots(lm_model)
+
+``` 
+
+**2. Test for homoscedasticity**   
+We also notice that the vertical spread of the residuals is equally distributed, which means the error term does not vary much as values of the outcome variable change. 
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+
+plot(lm_model, 1) # Residuals vs Fitted
+
+``` 
+  
+**3. Testing for Independence of residuals**   
+Large residual values on this plot would suggest that the model is not explaining some aspect of the data. Our model passes this test, because it does not have any standardized residual values above 1.  
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+
+plot(lm_model, 5) # Residuals vs Leverage
+
+``` 
+  
+We can double check by searching for any observations with Cook's distance above 1. As we see from the below output, there are none.  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+# Calculate Cook's distances
+cooksd <- cooks.distance(lm_model) 
+# Identify influential observations
+influential <- as.numeric(names(cooksd)[(cooksd > 1)]) 
+# Print influential observations
+print(influential)
+
+
+``` 
+
+  
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# Plot Cook's distances
+plot(cooksd, pch="*", cex=2, main="Influential Obs by Cooks distance")  # plot cook's distances
+abline(h = 4/((length(data$sdg_ind)-length(lm_model$coefficients)-2)), col="red")  # add cutoff line
+
+``` 
+
+  
+**4. Testing for Normality of the error distribution**   
+The below normal distribution test tells, whether the error terms are normally distributed. We want the residuals to be as close to the diagonal line as possible. However, generally we rarely have real data, where errors are perfectly normally distributed. So, overall it seems like our model passes the normality test, but to double check we also apply Shapiro-Wilk test.   
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+
+plot(lm_model, 2) # Normal Q-Q
+
+``` 
+  
+**Observations:**    
+The null hypothesis for the Shapiro-Wilk test is that the data is normally distributed. In this case, the p-value for the Shapiro-Wilk test is way above the significance level, which means that we cannot reject the null hypothesis and data is normally distributed.  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+# calculate residuals
+residuals <- residuals(lm_model) 
+# perform Shapiro-Wilk test on the residuals
+shapiro_test <- shapiro.test(residuals) 
+# print 
+print(shapiro_test) 
+
+``` 
+    
+**5. VIF Score**   
+Last but not least, since we are dealing with a multiple linear regression, we need to make sure there's no multicollinearity. So, we apply the VIF Score test. "A rough rule of thumb is that variance inflaction factors greater than 10 give some cause for concern." (Vehklahti p.93)
+Our VIF score indicate that there is some multicollenarity, but it is within acceptable range.   
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Check for Multicollinearity 
+car::vif(lm_model) 
+``` 
+    
+## Analyzing the beta coefficients   
+In order to estimate the impact of each individual variable on the SDG Index, we can look at the beta coefficients. The standardized beta coefficients allow us to compare the effects of the variables on the same scale, regardless of the units of measurement.  
+ 
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+# Calculate standardized beta coefficients
+beta_coefficients <- lm.beta(lm_model) 
+cat("Coefficients for SDG Index:\n")
+print(beta_coefficients)
+
+``` 
+
+**Assessing the statistical difference between the two variables**  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+linearHypothesis(lm_model, "hci_ind-infr_ind=0")
+
+``` 
+  
+**Observations:**    
+Both Human Capital and Infrastructure are statistically significant. They're both fundamentally important factors when we look at international development metrics. However, there is a statistically significant stronger dependency between the SDG Index of a country and Human Capital Index, than with Infrastructure Index.   
+   
+
+# Multivariate Multiple regression   
+### Examine the interaction with:  
+  > SDG 1 (No Poverty),  
+  > SDG 5 (Gender Equality),  
+  > SDG 13 (Climate Action).   
+  
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+
+# fit the multiple multivariate regression model
+model <- lm(cbind(sdg1, sdg5, sdg13) ~ hci_ind + infr_ind + sdg17_statperf, data = data) 
+# model summary 
+summary(model)
+
+``` 
+
+
+# Testing Regression assumptions  
+
+### 1. Test for Linearity and Homoscedasticity 
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE} 
+# Fit the models separately
+model_sdg1 <- lm(sdg1 ~ hci_ind + infr_ind + sdg17_statperf, data = data)
+model_sdg5 <- lm(sdg5 ~ hci_ind + infr_ind + sdg17_statperf, data = data)
+model_sdg13 <- lm(sdg13 ~ hci_ind + infr_ind + sdg17_statperf, data = data)
+
+# Print the summary of the models
+summary(model_sdg1) 
+summary(model_sdg5) 
+summary(model_sdg13) 
+
+# model_sdg1 
+par(mfrow=c(2,2)) 
+plot(model_sdg1)
+# model_sdg5
+par(mfrow=c(2,2))
+plot(model_sdg5) 
+# model_sdg13
+par(mfrow=c(2,2))
+plot(model_sdg13)
+
+
+``` 
+```{r,echo=TRUE, message=FALSE, warning=FALSE} 
+dwtest(model)
+
+
+``` 
+**Checking Multivariate Normality** 
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+mvn(data[c("sdg1", "sdg5", "sdg13")]) 
+
+``` 
+
+
+**Checking Multicollinearity** 
+Variance Inflation Factors (VIF) - the square root of the VIF indicates how much larger the standard error is, compared with what it would be if that variable were uncorrelated with the other predictor variables in the model.  
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+# Calculate VIF 
+vif_sdg1 <- car::vif(model_sdg1)
+vif_sdg5 <- car::vif(model_sdg5)
+vif_sdg13 <- car::vif(model_sdg13)
+
+# Print the VIFs
+print(vif_sdg1) 
+
+```   
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+# Extract the coefficients for each dependent variable
+coef_sdg1 <- coef(model)[, 1]
+coef_sdg5 <- coef(model)[, 2]
+coef_sdg13 <- coef(model)[, 3]
+
+# The standard deviations for each independent variable
+std_dev_ind <- apply(data[, c("hci_ind", "infr_ind", "sdg17_statperf")], 2, sd)
+
+# The standard deviations for each dependent variable
+std_dev_dep <- apply(data[, c("sdg1", "sdg5", "sdg13")], 2, sd)
+
+# The standardized beta coefficients for each dependent variable
+beta_coefficients_sdg1 <- coef_sdg1[-1] * std_dev_ind / std_dev_dep[1]
+beta_coefficients_sdg5 <- coef_sdg5[-1] * std_dev_ind / std_dev_dep[2]
+beta_coefficients_sdg13 <- coef_sdg13[-1] * std_dev_ind / std_dev_dep[3]
+
+# Coefficients for SDG 1
+cat("Coefficients for SDG 1, No Poverty:\n") 
+print(beta_coefficients_sdg1) 
+
+# Coefficients for SDG 5 
+cat("\nCoefficients for SDG 5, Gender Equality:\n")
+print(beta_coefficients_sdg5) 
+
+
+# Coefficients for SDG 13
+cat("\nCoefficients for SDG 13, Climate Action:\n")
+print(beta_coefficients_sdg13) 
+
+``` 
+
+  
+# Impact on SDG 1: No poverty   
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+
+# Fit the multiple linear regression model
+sdg1_model <- lm(sdg1 ~ hci_ind + infr_ind + sdg17_statperf, data = data) 
+# Calculate standardized beta coefficients
+beta_coefficients2 <- lm.beta(model_sdg1)   
+cat(" < Coefficients for SDG 1 > \n")  
+print(beta_coefficients2)    
+# Statistical difference of the coefficients 
+cat("\n < Statistical Difference of the coefficients > \n")
+linearHypothesis(model_sdg1, "hci_ind-infr_ind=0") 
+
+```  
+
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+
+``` 
+
+
